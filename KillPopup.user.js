@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Glorp Kill Popup
 // @namespace    local.glorp.killpopup
-// @version      2.2.0
+// @version      1.0.0
 // @description  Two-line kill confirmation from Krunker chat and killfeed HUD layouts.
 // @match        https://krunker.io/*
 // @run-at document-start
