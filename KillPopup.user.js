@@ -2,9 +2,9 @@
 // @name         Glorp Kill Popup
 // @author       BAXTERVASH
 // @namespace    local.glorp.killpopup
-// @version      2.3.2
-// @updateURL https://raw.githubusercontent.com/BaxterCash/Krunker-Matchmaker/main/KillPopup.user.js
-// @downloadURL https://raw.githubusercontent.com/BaxterCash/Krunker-Matchmaker/main/KillPopup.user.js
+// @version      2.3.3
+// @updateURL https://raw.githubusercontent.com/BaxterCash/Krunker-Kill-Popup/main/KillPopup.user.js
+// @downloadURL https://raw.githubusercontent.com/BaxterCash/Krunker-Kill-Popup/main/KillPopup.user.js
 // @description  Stacked kill confirmations from native Krunker HUD events.
 // @match        https://krunker.io/*
 // @run-at document-start
@@ -13,7 +13,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '2.3.2';
+    const VERSION = '2.3.3';
     if (window.top !== window.self || location.hostname !== 'krunker.io' ||
         !['/', '/index.html'].includes(location.pathname)) return;
     if (window.__glorpKillConfirmV2) return;
@@ -348,7 +348,7 @@
         <label>Row spacing (px)<input id="kc-stackGap" type="number" min="0" max="40" step="1"></label>
         <label class="kc-wide">Multi-kill window (s, 0 = off)<input id="kc-multiWindow" type="number" min="0" max="10" step="0.1"></label>
         <button id="kc-test" class="kc-wide" type="button">TEST NOTIFICATION</button>
-        </div><footer class="kc-credit"><small>AUTHOR:</small>BAXTERVASH <small>· VERSION 2.3.2</small></footer></section></div>`;
+        </div><footer class="kc-credit"><small>AUTHOR:</small>BAXTERVASH <small>· VERSION 2.3.3</small></footer></section></div>`;
         hud=root.querySelector('#kc-hud'); panel=root.querySelector('#kc-panel');
         toolbar=root.querySelector('#kc-toolbar'); trigger=root.querySelector('#kc-open');
         trigger.addEventListener('click',openMenu); root.querySelector('#kc-close').addEventListener('click',closeMenu);
@@ -387,11 +387,7 @@
         return [event.ctrlKey?'Ctrl':'',event.altKey?'Alt':'',event.shiftKey?'Shift':'',event.metaKey?'Meta':'',event.key===' '?'Space':event.key.length===1?event.key.toUpperCase():event.key].filter(Boolean).join('+');
     }
     function shortcutConflict(key) {
-        if(key==='F6') return true;
-        try {
-            const f=JSON.parse(localStorage.getItem('glorp_matchmaker_v1')||'null')?.filters;
-            return ['menuKey','switchKey','autoKey'].some((name,i)=>String(f?.[name]??['F2','F8','F7'][i]).toUpperCase()===key.toUpperCase());
-        }catch{return ['F2','F8','F7'].includes(key);}
+        return key.toUpperCase()==='F6';
     }
     window.addEventListener('keydown',event=>{
         if(!root || stopped || event.repeat || event.isComposing) return;
