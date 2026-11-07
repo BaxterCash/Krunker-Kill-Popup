@@ -1,8 +1,11 @@
 // ==UserScript==
 // @name         Glorp Kill Popup
+// @author       BAXTERVASH
 // @namespace    local.glorp.killpopup
-// @version      1.0.0
-// @description  Two-line kill confirmation from Krunker chat and killfeed HUD layouts.
+// @version      2.3.2
+// @updateURL https://raw.githubusercontent.com/BaxterCash/Krunker-Matchmaker/main/KillPopup.user.js
+// @downloadURL https://raw.githubusercontent.com/BaxterCash/Krunker-Matchmaker/main/KillPopup.user.js
+// @description  Stacked kill confirmations from native Krunker HUD events.
 // @match        https://krunker.io/*
 // @run-at document-start
 // @grant        none
@@ -10,6 +13,7 @@
 
 (() => {
     'use strict';
+    const VERSION = '2.3.2';
     if (window.top !== window.self || location.hostname !== 'krunker.io' ||
         !['/', '/index.html'].includes(location.pathname)) return;
     if (window.__glorpKillConfirmV2) return;
@@ -27,9 +31,9 @@
         enabled: true, textColor: '#f2f2f2', accentColor: '#f2ad38',
         opacity: 88, labelSize: 13, nameSize: 17, duration: 2.4, offsetY: 48,
         hideButton: true, buttonX: 16, buttonY: 155,
-        fadeIn: 0.15, fadeOut: 0.25, hideNativeFeed: true, lineGap: 0, menuKey: 'F3',
+        fadeIn: 0.15, fadeOut: 0.25, hideNativeFeed: true, lineGap: 0, maxRows:4, stackGap:8, multiWindow:3, menuKey: 'F3',
     });
-    const limits = { opacity:[0,100], labelSize:[8,48], nameSize:[8,64],
+    const limits = { maxRows:[1,8], stackGap:[0,40], multiWindow:[0,10], opacity:[0,100], labelSize:[8,48], nameSize:[8,64],
         duration:[0.3,10], offsetY:[8,300], buttonX:[0,2000], buttonY:[0,1400], fadeIn:[0,3], fadeOut:[0,3], lineGap:[0,50] };
     const color = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
     const clamp = (v, lo, hi, fallback) => v !== null && v !== '' &&
@@ -51,12 +55,21 @@
         }
     } catch { /* Storage is optional. */ }
     if(settings.menuKey && shortcutConflict(settings.menuKey)) settings.menuKey=['F3','F4','F9','F10'].find(key=>!shortcutConflict(key))||'';
+    function announceScriptUpdate(storageKey, title, node) {
+        try {
+            const prior=localStorage.getItem(storageKey);
+            localStorage.setItem(storageKey,VERSION);
+            if(!prior || prior===VERSION) return;
+            node.textContent=title+' UPDATED · '+VERSION;node.hidden=false;
+            setTimeout(()=>{node.hidden=true;},5000);
+        }catch{}
+    }
     function sourceEnabled() {
         try {const value=localStorage.getItem('kro_setngss_showKills');return value==='false'?false:value==='true'?true:null;}catch{return null;}
     }
     function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch {} }
 
-    let host, root, hud, panel, toolbar, trigger, noticeTimer, noticeAnimation, nativeStyle, visible = false, recordingKey=false;
+    let host, root, hud, panel, toolbar, trigger, nativeStyle, visible = false, recordingKey=false;
     let chatList, killFeed, chatObserver, feedObserver, discoveryObserver;
     let started = false, stopped = false, diagnosticTimer, diagnosticUntil = 0;
     let diagnosticRecords = [], diagnosticCount = 0, observedKills = 0;
@@ -85,7 +98,7 @@
         console.info('[KillPopup] Diagnostic capture stopped. Records remain in GlorpKillPopup.diagnostics.snapshot().');
     }
     window.GlorpKillPopup = window.GlorpKillConfirm = Object.freeze({
-        version:'2.2.0',
+        version:VERSION,
         diagnostics:Object.freeze({start:startDiagnostics,stop:stopDiagnostics,
             snapshot:() => JSON.parse(JSON.stringify({liveVerified:false, observedKills, eventSourceEnabled:sourceEnabled(),
                 chatList:!!chatList?.isConnected, killFeed:!!killFeed?.isConnected,
@@ -200,24 +213,44 @@
             }
         }
     }
-    function showKill(victim, test = false) {
-        if (!hud || (!settings.enabled && !test)) return;
-        clearTimeout(noticeTimer);
-        const from = hud.hidden ? 0 : Number(getComputedStyle(hud).opacity);
-        noticeAnimation?.cancel();
-        hud.querySelector('.kc-victim').textContent = victim;
-        hud.hidden = false;
-        // Display duration includes both fades. Scale long fades to fit instead of
-        // extending a notice or leaving an old completion callback alive.
-        const total=settings.duration*1000, target=settings.opacity/100;
+    const activeRows=new Map();
+    let lastKillAt=-Infinity, multiCount=0;
+    function clearRows() {
+        for(const [row,entry] of activeRows){clearTimeout(entry.timer);entry.animation?.cancel();row.remove();}
+        activeRows.clear();if(hud)hud.hidden=true;lastKillAt=-Infinity;multiCount=0;
+    }
+    function removeRow(row) {
+        const entry=activeRows.get(row);if(!entry)return;
+        clearTimeout(entry.timer);entry.animation?.cancel();activeRows.delete(row);row.remove();
+        if(!activeRows.size)hud.hidden=true;
+    }
+    function showKill(victim, test=false) {
+        if(!hud || (!settings.enabled && !test))return;
+        const now=performance.now();
+        if(!test){multiCount=settings.multiWindow>0 && now-lastKillAt<=settings.multiWindow*1000?multiCount+1:1;lastKillAt=now;}
+        const count=test?1:multiCount;
+        const multi=count===2?'DOUBLE KILL':count===3?'TRIPLE KILL':count===4?'QUAD KILL':count>=5?'MULTI KILL ×'+count:'';
+        const row=document.createElement('div');row.className='kc-entry';
+        const label=document.createElement('span');label.className='kc-label';
+        const name=document.createElement('span');name.className='kc-victim';
+        label.textContent=multi||'ELIMINATED';
+        name.textContent=victim;
+        label.hidden=!label.textContent;name.hidden=!name.textContent;
+        row.append(label,name);
+        for(const [css,key,unit] of [['color','textColor',''],['accent','accentColor',''],['label-size','labelSize','px'],['name-size','nameSize','px'],['line-gap','lineGap','px']])row.style.setProperty('--kc-'+css,settings[key]+unit);
+        const target=settings.opacity/100;row.style.opacity=String(target);
+        while(activeRows.size>=Math.floor(settings.maxRows))removeRow(activeRows.keys().next().value);
+        hud.prepend(row);hud.hidden=false;
+        const total=settings.duration*1000;
         const scale=Math.min(1,settings.duration/Math.max(settings.fadeIn+settings.fadeOut,0.001));
-        const enter=settings.fadeIn*1000*scale, exit=settings.fadeOut*1000*scale;
-        const frames=[{opacity:enter ? from : target,offset:0}];
-        if(enter) frames.push({opacity:target,offset:enter/total});
-        frames.push({opacity:target,offset:1-exit/total});
-        if(exit) frames.push({opacity:0,offset:1});
-        if((enter||exit) && typeof hud.animate==='function') noticeAnimation=hud.animate(frames,{duration:total,fill:'both',easing:'linear'});
-        noticeTimer = setTimeout(()=>{hud.hidden=true;noticeAnimation?.cancel();noticeAnimation=null;},total);
+        const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const enter=reduced?0:settings.fadeIn*1000*scale,exit=reduced?0:settings.fadeOut*1000*scale;
+        const frames=[{opacity:enter?0:target,transform:enter?'translateY(6px)':'none',offset:0}];
+        if(enter)frames.push({opacity:target,transform:'none',offset:enter/total});
+        frames.push({opacity:target,transform:'none',offset:1-exit/total});
+        if(exit)frames.push({opacity:0,transform:'translateY(-6px)',offset:1});
+        const animation=(enter||exit)&&typeof row.animate==='function'?row.animate(frames,{duration:total,fill:'both',easing:'linear'}):null;
+        activeRows.set(row,{animation,timer:setTimeout(()=>removeRow(row),total)});
     }
     function applySettings() {
         if (!root) return;
@@ -245,7 +278,9 @@
         toolbar.style.right=`${Math.min(settings.buttonX,Math.max(0,innerWidth-200))}px`;
         toolbar.style.top=`${Math.min(settings.buttonY,Math.max(0,innerHeight-60))}px`;
         toolbar.dataset.hidden=String(settings.hideButton && !visible);
-        if (!settings.enabled) { clearTimeout(noticeTimer); noticeAnimation?.cancel(); noticeAnimation=null; hud.hidden=true; }
+        hud.style.gap=settings.stackGap+'px';
+        while(activeRows.size>Math.floor(settings.maxRows))removeRow(activeRows.keys().next().value);
+        if (!settings.enabled) clearRows();
     }
     function closeMenu() {
         if (!visible) return;
@@ -264,8 +299,8 @@
         document.body.append(host); root=host.attachShadow({mode:'open'});
         root.innerHTML=`<style>
         :host{color:#eee;color-scheme:dark}*{box-sizing:border-box}[hidden]{display:none!important}
-        #kc-hud{position:fixed;left:50%;top:calc(50% + var(--kc-offset));transform:translateX(-50%);width:max-content;max-width:95vw;text-align:center;pointer-events:none;opacity:var(--kc-opacity);font-family:gamefont,GameFont,sans-serif;text-shadow:1px 2px 2px #000,-1px -1px 1px #000}
-        .kc-label,.kc-victim{display:block;line-height:1.3;white-space:pre;color:var(--kc-color)}
+        #kc-hud{display:flex;flex-direction:column;align-items:center;max-height:max(0px,calc(50dvh - var(--kc-offset) - 8px));overflow:hidden;position:fixed;left:50%;top:calc(50% + var(--kc-offset));transform:translateX(-50%);width:max-content;max-width:95vw;text-align:center;pointer-events:none;font-family:gamefont,GameFont,sans-serif;text-shadow:1px 2px 2px #000,-1px -1px 1px #000}
+        .kc-entry{max-width:95vw;overflow-wrap:anywhere}.kc-label,.kc-victim{display:block;line-height:var(--kc-line-height,1.3);white-space:pre-wrap;color:var(--kc-color)}
         .kc-label{font-size:var(--kc-label-size)}.kc-victim{font-size:var(--kc-name-size);color:var(--kc-accent);margin-top:var(--kc-line-gap)}
         #kc-toolbar{position:fixed;pointer-events:auto;padding:6px;display:flex;justify-content:flex-end}
         #kc-open{font:12px/1.5 gamefont,GameFont,sans-serif;background:linear-gradient(#414141,#242424);border:3px solid #111;box-shadow:0 5px #111;text-transform:uppercase;white-space:nowrap;padding:9px 11px}
@@ -276,19 +311,22 @@
         h2{margin:0;font-size:20px;font-weight:normal;text-shadow:2px 3px #111}
         .kc-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding:20px}
         label{display:flex;flex-direction:column;gap:7px;min-width:0;color:#d2d2d2}.kc-check{flex-direction:row;align-items:center}.kc-wide{grid-column:1/-1}
-        button,input{font:inherit;border-radius:0}button{cursor:pointer;border:2px solid #111;background:linear-gradient(#494949,#303030);color:#fff;box-shadow:inset 0 2px #ffffff18,0 4px #151515;padding:8px 12px;text-shadow:1px 2px #0008}
-        button:hover{background:linear-gradient(#606060,#414141)}button:focus-visible,input:focus-visible{outline:2px solid #f4b64c;outline-offset:2px}
-        input[type=number]{width:100%;min-width:0;padding:8px;border:2px solid #111;background:linear-gradient(#171717,#242424);color:#eee;box-shadow:inset 0 2px #0005}
+        button,input,select,textarea{font:inherit;border-radius:0}button{cursor:pointer;border:2px solid #111;background:linear-gradient(#494949,#303030);color:#fff;box-shadow:inset 0 2px #ffffff18,0 4px #151515;padding:8px 12px;text-shadow:1px 2px #0008}
+        button:hover{background:linear-gradient(#606060,#414141)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #f4b64c;outline-offset:2px}
+        input[type=number],input[type=text],select,textarea{width:100%;min-width:0;padding:8px;border:2px solid #111;background:linear-gradient(#171717,#242424);color:#eee;box-shadow:inset 0 2px #0005}
         input[type=color]{width:100%;height:34px;padding:2px;border:2px solid #111;background:#222}
         input[type=checkbox]{accent-color:#e5a239;width:16px;height:16px}
         #kc-source-warning{margin:0;color:#e5a239}
         #kc-test{background:linear-gradient(#e7a43b,#b67416);border-color:#17120a}
+        .kc-credit{padding:14px 20px;text-align:center;border-top:3px solid #111;color:#f2ad38}.kc-credit small{color:#aaa;margin-right:8px}
+        textarea{resize:vertical;min-height:65px}button:disabled{opacity:.45;cursor:default}
         @media(max-width:420px){.kc-body{grid-template-columns:1fr}header{padding:12px}h2{font-size:16px}}
         </style>
-        <div id="kc-hud" hidden aria-live="off"><span class="kc-label">ELIMINATED</span><span class="kc-victim">PlayerName</span></div>
+        <div id="kp-updated" hidden style="position:fixed;right:16px;top:210px;color:#aaa;font:11px/1.5 gamefont,GameFont,sans-serif;pointer-events:none;text-shadow:1px 2px #000" role="status"></div>
+        <div id="kc-hud" hidden aria-live="off"></div>
         <div id="kc-toolbar"><button id="kc-open" type="button" aria-expanded="false" aria-controls="kc-panel">KILL POPUP</button></div>
         <div id="kc-panel" hidden><section class="kc-window" role="dialog" aria-modal="true" aria-labelledby="kc-title">
-        <header><h2 id="kc-title">KILL POPUP</h2><button id="kc-close" type="button">CLOSE ×</button></header>
+        <header><h2 id="kc-title">KILL POPUP <small>v2.3.2</small></h2><button id="kc-close" type="button">CLOSE ×</button></header>
         <div class="kc-body">
         <label class="kc-check kc-wide"><input id="kc-enabled" type="checkbox">Enable Kill Popup</label><p id="kc-source-warning" class="kc-wide" hidden role="alert">Enable Show Kill Feed in Krunker Settings. The game does not generate kill messages while it is off.</p>
         <label>ELIMINATED size (px)<input id="kc-labelSize" type="number" min="8" max="48" step="1"></label>
@@ -306,8 +344,11 @@
         <label>Button from right (px)<input id="kc-buttonX" type="number" min="0" max="2000" step="1"></label>
         <label>Button from top (px)<input id="kc-buttonY" type="number" min="0" max="1400" step="1"></label>
         <label class="kc-check kc-wide"><input id="kc-hideButton" type="checkbox">Hide button until hovered</label>
+        <label>Visible kill rows<input id="kc-maxRows" type="number" min="1" max="8" step="1"></label>
+        <label>Row spacing (px)<input id="kc-stackGap" type="number" min="0" max="40" step="1"></label>
+        <label class="kc-wide">Multi-kill window (s, 0 = off)<input id="kc-multiWindow" type="number" min="0" max="10" step="0.1"></label>
         <button id="kc-test" class="kc-wide" type="button">TEST NOTIFICATION</button>
-        </div></section></div>`;
+        </div><footer class="kc-credit"><small>AUTHOR:</small>BAXTERVASH <small>· VERSION 2.3.2</small></footer></section></div>`;
         hud=root.querySelector('#kc-hud'); panel=root.querySelector('#kc-panel');
         toolbar=root.querySelector('#kc-toolbar'); trigger=root.querySelector('#kc-open');
         trigger.addEventListener('click',openMenu); root.querySelector('#kc-close').addEventListener('click',closeMenu);
@@ -327,14 +368,17 @@
         root.querySelector('#kc-test').addEventListener('click',()=>{closeMenu();showKill('PlayerName',true);});
         root.addEventListener('keydown',e=>{
             if(!visible) return;
+            e.stopPropagation();
             if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeMenu();}
             if(e.key==='Tab'){
-                const controls=[...panel.querySelectorAll('button,input')];
+                const controls=[...panel.querySelectorAll('button,input,select,textarea,summary')].filter(el=>!el.disabled && el.type!=='hidden' && el.getClientRects().length);
                 const first=controls[0],last=controls.at(-1);
                 if(e.shiftKey&&root.activeElement===first){e.preventDefault();last.focus();}
                 else if(!e.shiftKey&&root.activeElement===last){e.preventDefault();first.focus();}
             }
         });
+        root.addEventListener('keyup',e=>{if(visible)e.stopPropagation();});
+        root.addEventListener('pointerdown',e=>e.stopPropagation());
         // Do not steal F6: Glorp binds it to finding another lobby.
         applySettings();
     }
@@ -368,13 +412,13 @@
     function stop() {
         stopped=true; chatObserver?.disconnect(); feedObserver?.disconnect(); discoveryObserver?.disconnect();
         chatList=null; killFeed=null;
-        clearTimeout(noticeTimer); clearTimeout(diagnosticTimer); diagnosticUntil=0;
-        noticeAnimation?.cancel(); nativeStyle?.remove(); nativeStyle=null;
-        pending.clear(); if(hud) hud.hidden=true;
+        clearTimeout(diagnosticTimer); diagnosticUntil=0;
+        nativeStyle?.remove(); nativeStyle=null;
+        pending.clear(); clearRows();
     }
     function start() {
         if(started||stopped) return; started=true;
-        buildUI(); startDiagnostics(); connectSources(); syncPointerLock();
+        buildUI(); announceScriptUpdate('glorp_killpopup_installed_version','KILL POPUP',root.querySelector('#kp-updated')); startDiagnostics(); connectSources(); syncPointerLock();
         // Event-driven source discovery/reconnection, no interval polling. Ignore
         // ordinary HUD mutations as soon as both known containers are connected.
         discoveryObserver=new MutationObserver(()=>{
